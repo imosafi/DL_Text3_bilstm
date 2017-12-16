@@ -10,13 +10,16 @@ NUM_INVALID_EXAMPLES = 500
 SIZE_OF_TRAIN = 30000
 SIZE_OF_TEST = 5000
 
+# SIZE_OF_TRAIN = 20
+# SIZE_OF_TEST = 4
+
 
 def generate_train_test_sequneces():
-    valid_sequences = generate_valid_examples((SIZE_OF_TRAIN + SIZE_OF_TEST) / 2)
-    invalid_sequences = generate_invalid_examples((SIZE_OF_TRAIN + SIZE_OF_TEST) / 2)
-    slicer = len(valid_sequences) - SIZE_OF_TEST / 2
-    train = valid_sequences[:slicer] + invalid_sequences[:slicer]
-    test = valid_sequences[slicer:] + invalid_sequences[slicer:]
+    labeled_valid_sequences = [x + ' ' + '0' for x in generate_valid_examples((SIZE_OF_TRAIN + SIZE_OF_TEST) / 2)]
+    labeled_invalid_sequences = [x + ' ' + '1' for x in generate_invalid_examples((SIZE_OF_TRAIN + SIZE_OF_TEST) / 2)]
+    slicer = len(labeled_valid_sequences) - SIZE_OF_TEST / 2
+    train = labeled_valid_sequences[:slicer] + labeled_invalid_sequences[:slicer]
+    test = labeled_valid_sequences[slicer:] + labeled_invalid_sequences[slicer:]
     return train, test
 
 
