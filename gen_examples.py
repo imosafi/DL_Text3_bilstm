@@ -58,17 +58,25 @@ def is_valid_sequence(sequence):
 
 def generate_valid_examples(size):
     sequences = []
-    for i in xrange(size):
+    i = 0
+    while i < size:
         xeger._limit = randint(1, UPPER_LIMIT)
-        sequences.append(str(xeger.xeger(LANGUAGE_REG_EXPRESSION)))
+        example = str(xeger.xeger(LANGUAGE_REG_EXPRESSION))
+        if example not in sequences:
+            sequences.append(example)
+            i += 1
     return sequences
 
 
 def generate_invalid_examples(size):
     sequences = []
-    for i in xrange(size):
+    i = 0
+    while i < size:
         xeger._limit = randint(1, UPPER_LIMIT)
-        sequences.append(generate_invalid_sequence())
+        example = generate_invalid_sequence()
+        if example not in sequences:
+            sequences.append(example)
+            i += 1
     return sequences
 
 
