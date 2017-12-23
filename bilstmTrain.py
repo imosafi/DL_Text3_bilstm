@@ -8,7 +8,7 @@ import os
 
 POS_PATH = 'data/pos/'
 NER_PATH = 'data/ner/'
-UNKNOWN_WORD = 'UNKNOWN'
+UNKNOWN_WORD = 'unk'
 
 WORD_EMBED_SIZE = 128  # 50
 CHAR_EMBED_SIZE = 20
@@ -98,10 +98,10 @@ def build_graph(words, holder):
     bws = bl1_init.transduce(reversed(wembs))
 
     # biLSTM states
-    bi = [dy.concatenate([f,b]) for f,b in zip(fws, reversed(bws))]
+    bi = [dy.concatenate([f, b]) for f, b in zip(fws, reversed(bws))]
     fws2 = fl2_init.transduce(bi)
     bws2 = bl2_init.transduce(reversed(bi))
-    b_tag = [dy.concatenate([f,b]) for f,b in zip(fws2, reversed(bws2))]
+    b_tag = [dy.concatenate([f, b]) for f, b in zip(fws2, reversed(bws2))]
 
     # check how should it be (the linear layer)
     # MLPs
@@ -131,7 +131,7 @@ def predict_tags(words, holder):
        tags.append(holder.index2tag[tag])
     return zip(words, tags)
 
-# change to support ner
+
 def evaluate_set(dev_batches, holder):
     good = 0
     bad = 0
@@ -139,8 +139,10 @@ def evaluate_set(dev_batches, holder):
         words = [word for word, tag in sentence]
         real_tags = [tag for word, tag in sentence]
         tags = [tag for word, tag in predict_tags(words, holder)]
-        for go, gu in zip(real_tags, tags):
-            if go == gu:
+        for t1, t2 in zip(real_tags, tags):
+            if holder.tagging_type == 'ner' and t1 == 'o' and t2 == 'o':
+                continue
+            if t1 == t2:
                 good += 1
             else:
                 bad += 1
@@ -161,16 +163,26 @@ def save_results_and_model(evaluation_results, current_date, current_time, taggi
         f.write('total training time: {}\n'.format(total_training_time))
         f.write('num of epochs: {}\n'.format(EPOCHS))
         f.write('evaluated every: {}\n'.format(EVALUATE_ITERATION))
-    with open(path +'/evaluation.txt', 'w') as f:
+    with open(path + '/' + tagging_type + '_' + input_representation + '_' + 'evaluation.txt', 'w') as f:
         f.write(''.join([str(x) + ' ' for x in evaluation_results]))
     # model.save('model', [word_embedding, char_embedding, pH, pO, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2, bwdRNN_layer2])
     model.save(path + '/model')
 
 
+def replace_rare_words(words):
+    # counter = Counter(words)
+    # for key, value in counter:
+    #     if value == 1:
+    #         for word in words:
+
+    c = 2
+    return c
+
 class ComponentHolder:
-    def __init__(self, input_representation, word2index, index2tag, tag2index, char2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
+    def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
                  bwdRNN_layer2, pH, pO, word_embedding, char_embedding, char_rnn, d_W, d_b):
         self.input_representation = input_representation
+        self.tagging_type = tagging_type
         self.word2index = word2index
         self.index2tag = index2tag
         self.tag2index = tag2index
@@ -188,13 +200,15 @@ class ComponentHolder:
         self.d_b = d_b
 
 
-def main():
+def main(tagging, in_rep):
     vocab = []
     tags = []
-    input_representation = sys.argv[1]
+    # input_representation = sys.argv[1]
+    input_representation = in_rep
     train_file = sys.argv[2]
     model_file = sys.argv[3]
-    tagging_type = sys.argv[4]
+    # tagging_type = sys.argv[4]
+    tagging_type = tagging
 
     validate_args(input_representation, tagging_type)
 
@@ -203,6 +217,7 @@ def main():
 
     # train_batches = train_batches[:100] # remove later
 
+    vocab = replace_rare_words(vocab)
 
     vocab = set(vocab)
     vocab = list(vocab)
@@ -274,7 +289,7 @@ def main():
     fwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=hidden_dim, model=model)
     bwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=hidden_dim, model=model)
 
-    holder = ComponentHolder(input_representation, word2index, index2tag, tag2index, char2index,  fwdRNN_layer1, bwdRNN_layer1,
+    holder = ComponentHolder(input_representation, tagging_type,  word2index, index2tag, tag2index, char2index,  fwdRNN_layer1, bwdRNN_layer1,
                              fwdRNN_layer2, bwdRNN_layer2, pH, pO, word_embedding, char_embedding, char_rnn, d_W, d_b)
 
     start_training_time = datetime.now()
@@ -308,6 +323,13 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main('pos', 'a')
+    # main('pos', 'b')
+    # main('pos', 'c')
+    # main('pos', 'd')
+    # main('ner', 'a')
+    # main('ner', 'b')
+    # main('ner', 'c')
+    # main('ner', 'd')
 
 c = 2
