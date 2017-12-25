@@ -17,7 +17,23 @@ EVALUATE_ITERATION = 10000
 # replace rare words with the unknown char
 
 
-def read_data_into_batches(file_name, is_training_file=False):
+def read_dev_into_batches(file_name, keys_to_replace):
+    batches = []
+    current_batch = []
+    for line in file(file_name):
+        if line == '\n':
+            batches.append(current_batch)
+            current_batch = []
+        else:
+            text, label = line.strip().lower().split()
+            if text not in keys_to_replace:
+                current_batch.append((text, label))
+            else:
+                current_batch.append((UNKNOWN_WORD, label))
+    return batches
+
+
+def read_train_data_into_batches(file_name, keys_to_replace):
     vocab = []
     tags = []
     batches = []
@@ -28,13 +44,15 @@ def read_data_into_batches(file_name, is_training_file=False):
             current_batch = []
         else:
             text, label = line.strip().lower().split()
-            current_batch.append((text, label))
-            if is_training_file:
+            if text not in keys_to_replace:
+                current_batch.append((text, label))
                 vocab.append(text)
                 tags.append(label)
-    if is_training_file:
-        return batches, vocab, tags
-    return batches
+            else:
+                current_batch.append((UNKNOWN_WORD, label))
+                vocab.append(UNKNOWN_WORD)
+                tags.append(label)
+    return batches, vocab, tags
 
 
 def get_subword_vocab(words):
@@ -81,11 +99,11 @@ def get_word_rep(word, holder):
         char_embeddings = [holder.char_embedding[c_index] for c_index in char_indexes]
         b = c_init.transduce(char_embeddings)[-1]
         ab = dy.concatenate([a, b])
-        result = dy.tanh(d_W * ab) + d_b
+        result = dy.tanh(d_W * ab + d_b)
         return result
 
 
-def build_graph(words, holder):
+def build_graph(words, holder, is_training):
     dy.renew_cg()
     # initialize the RNNs
     fl1_init = holder.fwdRNN_layer1.initial_state()
@@ -102,17 +120,23 @@ def build_graph(words, holder):
     fws2 = fl2_init.transduce(bi)
     bws2 = bl2_init.transduce(reversed(bi))
     b_tag = [dy.concatenate([f, b]) for f, b in zip(fws2, reversed(bws2))]
-
-    # check how should it be (the linear layer)
-    # MLPs
     H = dy.parameter(holder.pH)
     O = dy.parameter(holder.pO)
-    outs = [O*(dy.tanh(H * x)) for x in b_tag]
+
+    if is_training:
+        new_values = [dy.dropout(val, 0.25) for val in b_tag]
+        outs = [O * (dy.tanh(H * x)) for x in new_values]
+    else:
+        outs = [O * (dy.tanh(H * x)) for x in b_tag]
+    # check how should it be (the linear layer)
+    # MLPs
+
+
     return outs
 
 
 def calc_loss(words, tags, holder):
-    vecs = build_graph(words, holder)
+    vecs = build_graph(words, holder, is_training=True)
     losses = []
     for v, t in zip(vecs, tags):
         tid = holder.tag2index[t]
@@ -122,7 +146,7 @@ def calc_loss(words, tags, holder):
 
 
 def predict_tags(words, holder):
-    vecs = build_graph(words, holder)
+    vecs = build_graph(words, holder, is_training=False)
     vecs = [dy.softmax(v) for v in vecs]
     probs = [v.npvalue() for v in vecs]
     tags = []
@@ -169,14 +193,20 @@ def save_results_and_model(evaluation_results, current_date, current_time, taggi
     model.save(path + '/model')
 
 
-def replace_rare_words(words):
-    # counter = Counter(words)
-    # for key, value in counter:
-    #     if value == 1:
-    #         for word in words:
+def get_train_words(file_name):
+    vocab = []
+    for line in file(file_name):
+        if not line == '\n':
+            text, _ = line.strip().lower().split()
+            vocab.append(text)
+    return vocab
 
-    c = 2
-    return c
+
+def get_rare_words(words):
+    counter = Counter(words)
+    keys_to_replace = [key for key in counter.keys() if counter[key] == 1]
+    return keys_to_replace
+
 
 class ComponentHolder:
     def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
@@ -210,20 +240,24 @@ def main(tagging, in_rep):
     # tagging_type = sys.argv[4]
     tagging_type = tagging
 
+    keys_to_replace = None
+
     validate_args(input_representation, tagging_type)
 
-    train_batches, vocab, tags = read_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train', is_training_file=True)
-    dev_batches = read_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev')
+    keys_to_replace = get_rare_words(get_train_words((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train'))
+    train_batches, vocab, tags = read_train_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train', keys_to_replace)
+    dev_batches = read_dev_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev', keys_to_replace)
 
     # train_batches = train_batches[:100] # remove later
 
-    vocab = replace_rare_words(vocab)
+
+
 
     vocab = set(vocab)
     vocab = list(vocab)
     if input_representation == 'c':
         vocab = list(get_subword_vocab(vocab))
-    vocab.append(UNKNOWN_WORD)
+    # vocab.append(UNKNOWN_WORD)
     tags = set(tags)
 
 
@@ -324,9 +358,9 @@ def main(tagging, in_rep):
 
 if __name__ == '__main__':
     main('pos', 'a')
-    # main('pos', 'b')
-    # main('pos', 'c')
-    # main('pos', 'd')
+    main('pos', 'b')
+    main('pos', 'c')
+    main('pos', 'd')
     # main('ner', 'a')
     # main('ner', 'b')
     # main('ner', 'c')
