@@ -9,11 +9,14 @@ import os
 POS_PATH = 'data/pos/'
 NER_PATH = 'data/ner/'
 UNKNOWN_WORD = 'unk'
+UNKNOW_CHAR = '~'
 
 WORD_EMBED_SIZE = 128  # 50
 CHAR_EMBED_SIZE = 20
 EPOCHS = 5  # 5
 EVALUATE_ITERATION = 10000
+POS_VOCAB_SIZE = 30000
+NER_VOCAB_SIZE = 18000
 # replace rare words with the unknown char
 
 
@@ -79,7 +82,7 @@ def get_word_rep(word, holder):
         return holder.word_embedding[w_index]
     elif holder.input_representation == 'b':
         c_init = holder.char_rnn.initial_state()
-        char_indexes = [holder.char2index[c] for c in list(word)]
+        char_indexes = [holder.char2index[c] if c in holder.char2index else holder.char2index[UNKNOW_CHAR] for c in list(word)]
         char_embeddings = [holder.char_embedding[c_index] for c_index in char_indexes]
         return c_init.transduce(char_embeddings)[-1]
     elif holder.input_representation == 'c':
@@ -95,12 +98,11 @@ def get_word_rep(word, holder):
         w_index = holder.word2index[word] if word in holder.word2index else holder.word2index[UNKNOWN_WORD]
         a = holder.word_embedding[w_index]
         c_init = holder.char_rnn.initial_state()
-        char_indexes = [holder.char2index[c] for c in list(word)]
+        char_indexes = [holder.char2index[c] if c in holder.char2index else holder.char2index[UNKNOW_CHAR] for c in list(word)]
         char_embeddings = [holder.char_embedding[c_index] for c_index in char_indexes]
         b = c_init.transduce(char_embeddings)[-1]
         ab = dy.concatenate([a, b])
-        result = dy.tanh(d_W * ab + d_b)
-        return result
+        return d_W * ab + d_b
 
 
 def build_graph(words, holder, is_training):
@@ -120,14 +122,14 @@ def build_graph(words, holder, is_training):
     fws2 = fl2_init.transduce(bi)
     bws2 = bl2_init.transduce(reversed(bi))
     b_tag = [dy.concatenate([f, b]) for f, b in zip(fws2, reversed(bws2))]
-    H = dy.parameter(holder.pH)
-    O = dy.parameter(holder.pO)
+    W_ab = dy.parameter(holder.W_ab)
+    b_ab = dy.parameter(holder.b_ab)
 
-    if is_training:
-        new_values = [dy.dropout(val, 0.25) for val in b_tag]
-        outs = [O * (dy.tanh(H * x)) for x in new_values]
-    else:
-        outs = [O * (dy.tanh(H * x)) for x in b_tag]
+    # if is_training:
+    #     new_values = [dy.dropout(val, 0.25) for val in b_tag]
+    #     outs = [O * (dy.tanh(H * x)) for x in new_values]
+    # else:
+    outs = [(W_ab * x + b_ab) for x in b_tag]
     # check how should it be (the linear layer)
     # MLPs
 
@@ -136,7 +138,7 @@ def build_graph(words, holder, is_training):
 
 
 def calc_loss(words, tags, holder):
-    vecs = build_graph(words, holder, is_training=True)
+    vecs = build_graph(words, holder, is_training=False)
     losses = []
     for v, t in zip(vecs, tags):
         tid = holder.tag2index[t]
@@ -202,15 +204,16 @@ def get_train_words(file_name):
     return vocab
 
 
-def get_rare_words(words):
+def get_rare_words(words, vocab_size):
     counter = Counter(words)
-    keys_to_replace = [key for key in counter.keys() if counter[key] == 1]
-    return keys_to_replace
+    most_common_keys = [x[0] for x in counter.most_common(vocab_size)]
+    keys_to_remove = [x for x in counter.keys() if x not in most_common_keys]
+    return keys_to_remove
 
 
 class ComponentHolder:
     def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
-                 bwdRNN_layer2, pH, pO, word_embedding, char_embedding, char_rnn, d_W, d_b):
+                 bwdRNN_layer2, W_ab, b_ab, word_embedding, char_embedding, char_rnn, d_W, d_b):
         self.input_representation = input_representation
         self.tagging_type = tagging_type
         self.word2index = word2index
@@ -221,8 +224,8 @@ class ComponentHolder:
         self.bwdRNN_layer1 = bwdRNN_layer1
         self.fwdRNN_layer2 = fwdRNN_layer2
         self.bwdRNN_layer2 = bwdRNN_layer2
-        self.pH = pH
-        self.pO = pO
+        self.W_ab = W_ab
+        self.b_ab = b_ab
         self.word_embedding = word_embedding
         self.char_embedding = char_embedding
         self.char_rnn = char_rnn
@@ -244,7 +247,7 @@ def main(tagging, in_rep):
 
     validate_args(input_representation, tagging_type)
 
-    keys_to_replace = get_rare_words(get_train_words((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train'))
+    keys_to_replace = get_rare_words(get_train_words((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train'), POS_VOCAB_SIZE if tagging_type == 'pos' else NER_VOCAB_SIZE)
     train_batches, vocab, tags = read_train_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train', keys_to_replace)
     dev_batches = read_dev_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev', keys_to_replace)
 
@@ -271,6 +274,7 @@ def main(tagging, in_rep):
     for word in vocab:
         unique_chars.extend(list(word))
     unique_chars = set(unique_chars)
+    unique_chars.add(UNKNOW_CHAR)
     num_of_chars = len(unique_chars)
     char2index = {c: i for i, c in enumerate(unique_chars)}
 
@@ -281,30 +285,31 @@ def main(tagging, in_rep):
     char_rnn = None
     d_W = None
     d_b = None
+    ab_tag_output = 100
 
     # here execute according to a, b, c or d
     if input_representation == 'a' or input_representation == 'c':
         rnnlayer1_input_dim = 128
         rnnlayer2_input_dim = 100
         hidden_dim = 50
-        pH_dim1 = 32
-        pH_dim2 = 100
+        # pH_dim1 = 32
+        # pH_dim2 = 100
     elif input_representation == 'b':
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
         char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=64, model=model)
-        pH_dim1 = 32
-        pH_dim2 = 100
+        # pH_dim1 = 32
+        # pH_dim2 = 100
         rnnlayer1_input_dim = 64
         hidden_dim = 50
         rnnlayer2_input_dim = 100
-        pH_dim1 = 32
-        pH_dim2 = 100
+        # pH_dim1 = 32
+        # pH_dim2 = 100
     elif input_representation == 'd':
         rnnlayer1_input_dim = 200
         rnnlayer2_input_dim = 100
         hidden_dim = 50
-        pH_dim1 = 32
-        pH_dim2 = 100
+        # pH_dim1 = 32
+        # pH_dim2 = 100
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
         char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=64, model=model)
         d_W = model.add_parameters((200, 192))
@@ -312,9 +317,11 @@ def main(tagging, in_rep):
 
     word_embedding = model.add_lookup_parameters((vocab_size, WORD_EMBED_SIZE))
 
+    W_ab = model.add_parameters((len(tags), ab_tag_output))
+    b_ab = model.add_parameters(len(tags))
 
-    pH = model.add_parameters((pH_dim1, pH_dim2))
-    pO = model.add_parameters((len(tags), pH_dim1))
+    # pH = model.add_parameters((pH_dim1, pH_dim2))
+    # pO = model.add_parameters((len(tags), pH_dim1))
 
     # here we'll need to change the dim by the selected way of representation
     fwdRNN_layer1 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer1_input_dim, hidden_dim=hidden_dim, model=model)
@@ -324,7 +331,7 @@ def main(tagging, in_rep):
     bwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=hidden_dim, model=model)
 
     holder = ComponentHolder(input_representation, tagging_type,  word2index, index2tag, tag2index, char2index,  fwdRNN_layer1, bwdRNN_layer1,
-                             fwdRNN_layer2, bwdRNN_layer2, pH, pO, word_embedding, char_embedding, char_rnn, d_W, d_b)
+                             fwdRNN_layer2, bwdRNN_layer2, W_ab, b_ab, word_embedding, char_embedding, char_rnn, d_W, d_b)
 
     start_training_time = datetime.now()
     current_date = start_training_time.strftime("%d.%m.%Y")
@@ -357,13 +364,13 @@ def main(tagging, in_rep):
 
 
 if __name__ == '__main__':
-    main('pos', 'a')
-    main('pos', 'b')
-    main('pos', 'c')
-    main('pos', 'd')
-    # main('ner', 'a')
-    # main('ner', 'b')
-    # main('ner', 'c')
-    # main('ner', 'd')
+    # main('pos', 'a')
+    # main('pos', 'b')
+    # main('pos', 'c')
+    # main('pos', 'd')
+    main('ner', 'a')
+    main('ner', 'b')
+    main('ner', 'c')
+    main('ner', 'd')
 
 c = 2
