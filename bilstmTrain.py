@@ -5,22 +5,22 @@ import sys
 import numpy as np
 from datetime import datetime
 import os
+import pickle
 
 POS_PATH = 'data/pos/'
 NER_PATH = 'data/ner/'
 UNKNOWN_WORD = 'unk'
 UNKNOW_CHAR = '~'
 
-WORD_EMBED_SIZE = 128  # 50
+WORD_EMBED_SIZE = 128
 CHAR_EMBED_SIZE = 20
-EPOCHS = 5  # 5
-EVALUATE_ITERATION = 10000
-POS_VOCAB_SIZE = 30000
-NER_VOCAB_SIZE = 18000
-# replace rare words with the unknown char
+EPOCHS = 5
+EVALUATE_ITERATION = 500
+POS_VOCAB_SIZE = 35000
+NER_VOCAB_SIZE = 20000
 
 
-def read_dev_into_batches(file_name, keys_to_replace):
+def read_dev_into_batches(file_name):
     batches = []
     current_batch = []
     for line in file(file_name):
@@ -29,14 +29,11 @@ def read_dev_into_batches(file_name, keys_to_replace):
             current_batch = []
         else:
             text, label = line.strip().lower().split()
-            if text not in keys_to_replace:
-                current_batch.append((text, label))
-            else:
-                current_batch.append((UNKNOWN_WORD, label))
+            current_batch.append((text, label))
     return batches
 
 
-def read_train_data_into_batches(file_name, keys_to_replace):
+def read_train_data_into_batches(file_name):
     vocab = []
     tags = []
     batches = []
@@ -47,14 +44,9 @@ def read_train_data_into_batches(file_name, keys_to_replace):
             current_batch = []
         else:
             text, label = line.strip().lower().split()
-            if text not in keys_to_replace:
-                current_batch.append((text, label))
-                vocab.append(text)
-                tags.append(label)
-            else:
-                current_batch.append((UNKNOWN_WORD, label))
-                vocab.append(UNKNOWN_WORD)
-                tags.append(label)
+            current_batch.append((text, label))
+            vocab.append(text)
+            tags.append(label)
     return batches, vocab, tags
 
 
@@ -105,9 +97,8 @@ def get_word_rep(word, holder):
         return d_W * ab + d_b
 
 
-def build_graph(words, holder, is_training):
+def build_graph(words, holder):
     dy.renew_cg()
-    # initialize the RNNs
     fl1_init = holder.fwdRNN_layer1.initial_state()
     bl1_init = holder.bwdRNN_layer1.initial_state()
     fl2_init = holder.fwdRNN_layer2.initial_state()
@@ -117,7 +108,6 @@ def build_graph(words, holder, is_training):
     fws = fl1_init.transduce(wembs)
     bws = bl1_init.transduce(reversed(wembs))
 
-    # biLSTM states
     bi = [dy.concatenate([f, b]) for f, b in zip(fws, reversed(bws))]
     fws2 = fl2_init.transduce(bi)
     bws2 = bl2_init.transduce(reversed(bi))
@@ -125,20 +115,11 @@ def build_graph(words, holder, is_training):
     W_ab = dy.parameter(holder.W_ab)
     b_ab = dy.parameter(holder.b_ab)
 
-    # if is_training:
-    #     new_values = [dy.dropout(val, 0.25) for val in b_tag]
-    #     outs = [O * (dy.tanh(H * x)) for x in new_values]
-    # else:
-    outs = [(W_ab * x + b_ab) for x in b_tag]
-    # check how should it be (the linear layer)
-    # MLPs
-
-
-    return outs
+    return [(W_ab * x + b_ab) for x in b_tag]
 
 
 def calc_loss(words, tags, holder):
-    vecs = build_graph(words, holder, is_training=False)
+    vecs = build_graph(words, holder)
     losses = []
     for v, t in zip(vecs, tags):
         tid = holder.tag2index[t]
@@ -148,7 +129,7 @@ def calc_loss(words, tags, holder):
 
 
 def predict_tags(words, holder):
-    vecs = build_graph(words, holder, is_training=False)
+    vecs = build_graph(words, holder)
     vecs = [dy.softmax(v) for v in vecs]
     probs = [v.npvalue() for v in vecs]
     tags = []
@@ -180,7 +161,7 @@ def ensure_directory_exists(directory_path):
         os.makedirs(directory_path)
 
 
-def save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model):
+def save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model, model_file):
     path = 'results/{}_{}'.format(current_date, current_time)
     ensure_directory_exists(path)
     with open(path + '/results.txt', 'w') as f:
@@ -191,8 +172,7 @@ def save_results_and_model(evaluation_results, current_date, current_time, taggi
         f.write('evaluated every: {}\n'.format(EVALUATE_ITERATION))
     with open(path + '/' + tagging_type + '_' + input_representation + '_' + 'evaluation.txt', 'w') as f:
         f.write(''.join([str(x) + ' ' for x in evaluation_results]))
-    # model.save('model', [word_embedding, char_embedding, pH, pO, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2, bwdRNN_layer2])
-    model.save(path + '/model')
+    model.save(path + '/' + model_file)
 
 
 def get_train_words(file_name):
@@ -209,6 +189,11 @@ def get_rare_words(words, vocab_size):
     most_common_keys = [x[0] for x in counter.most_common(vocab_size)]
     keys_to_remove = [x for x in counter.keys() if x not in most_common_keys]
     return keys_to_remove
+
+
+def get_rare_chars(unique_chars):
+    counter = Counter(unique_chars)
+    return [x for x in counter.keys() if counter[x] == 1]
 
 
 class ComponentHolder:
@@ -233,36 +218,28 @@ class ComponentHolder:
         self.d_b = d_b
 
 
-def main(tagging, in_rep):
-    vocab = []
-    tags = []
-    # input_representation = sys.argv[1]
-    input_representation = in_rep
+def main():
+    input_representation = sys.argv[1]
     train_file = sys.argv[2]
     model_file = sys.argv[3]
-    # tagging_type = sys.argv[4]
-    tagging_type = tagging
-
-    keys_to_replace = None
+    tagging_type = sys.argv[4]
 
     validate_args(input_representation, tagging_type)
 
-    keys_to_replace = get_rare_words(get_train_words((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train'), POS_VOCAB_SIZE if tagging_type == 'pos' else NER_VOCAB_SIZE)
-    train_batches, vocab, tags = read_train_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train', keys_to_replace)
-    dev_batches = read_dev_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev', keys_to_replace)
-
-    # train_batches = train_batches[:100] # remove later
-
+    rare_words = get_rare_words(get_train_words((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'train'), POS_VOCAB_SIZE if tagging_type == 'pos' else NER_VOCAB_SIZE)
+    train_batches, vocab, tags = read_train_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + train_file)
+    dev_batches = read_dev_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev')
 
 
 
     vocab = set(vocab)
+    for word in rare_words:
+        vocab.remove(word)
+    vocab.add(UNKNOWN_WORD)
     vocab = list(vocab)
     if input_representation == 'c':
         vocab = list(get_subword_vocab(vocab))
-    # vocab.append(UNKNOWN_WORD)
     tags = set(tags)
-
 
 
     tag2index = {c: i for i, c in enumerate(tags)}
@@ -273,7 +250,10 @@ def main(tagging, in_rep):
     unique_chars = []
     for word in vocab:
         unique_chars.extend(list(word))
+    rare_chars = get_rare_chars(unique_chars)
     unique_chars = set(unique_chars)
+    for c in rare_chars:
+        unique_chars.remove(c)
     unique_chars.add(UNKNOW_CHAR)
     num_of_chars = len(unique_chars)
     char2index = {c: i for i, c in enumerate(unique_chars)}
@@ -287,29 +267,20 @@ def main(tagging, in_rep):
     d_b = None
     ab_tag_output = 100
 
-    # here execute according to a, b, c or d
     if input_representation == 'a' or input_representation == 'c':
         rnnlayer1_input_dim = 128
         rnnlayer2_input_dim = 100
         hidden_dim = 50
-        # pH_dim1 = 32
-        # pH_dim2 = 100
     elif input_representation == 'b':
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
         char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=64, model=model)
-        # pH_dim1 = 32
-        # pH_dim2 = 100
         rnnlayer1_input_dim = 64
         hidden_dim = 50
         rnnlayer2_input_dim = 100
-        # pH_dim1 = 32
-        # pH_dim2 = 100
     elif input_representation == 'd':
         rnnlayer1_input_dim = 200
         rnnlayer2_input_dim = 100
         hidden_dim = 50
-        # pH_dim1 = 32
-        # pH_dim2 = 100
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
         char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=64, model=model)
         d_W = model.add_parameters((200, 192))
@@ -320,10 +291,6 @@ def main(tagging, in_rep):
     W_ab = model.add_parameters((len(tags), ab_tag_output))
     b_ab = model.add_parameters(len(tags))
 
-    # pH = model.add_parameters((pH_dim1, pH_dim2))
-    # pO = model.add_parameters((len(tags), pH_dim1))
-
-    # here we'll need to change the dim by the selected way of representation
     fwdRNN_layer1 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer1_input_dim, hidden_dim=hidden_dim, model=model)
     bwdRNN_layer1 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer1_input_dim, hidden_dim=hidden_dim, model=model)
 
@@ -337,7 +304,6 @@ def main(tagging, in_rep):
     current_date = start_training_time.strftime("%d.%m.%Y")
     current_time = start_training_time.strftime("%H:%M:%S")
 
-    # num_tagged = 0
     evaluation_results = []
     cum_loss = 0
     for iter in xrange(EPOCHS):
@@ -352,7 +318,6 @@ def main(tagging, in_rep):
             tags = [tag for word, tag in sentence]
             loss_exp = calc_loss(words, tags, holder)
             cum_loss += loss_exp.scalar_value()
-            # num_tagged += len(golds)
             loss_exp.backward()
             trainer.update()
         print 'epoch took: ' + str(datetime.now() - pretrain_time)
@@ -360,17 +325,7 @@ def main(tagging, in_rep):
     total_training_time = datetime.now() - start_training_time
     print 'total training time was {}'.format(total_training_time)
 
-    save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model)
-
+    save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model, model_file)
 
 if __name__ == '__main__':
-    # main('pos', 'a')
-    # main('pos', 'b')
-    # main('pos', 'c')
-    # main('pos', 'd')
-    main('ner', 'a')
-    main('ner', 'b')
-    main('ner', 'c')
-    main('ner', 'd')
-
-c = 2
+    main()
