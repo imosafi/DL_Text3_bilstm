@@ -10,6 +10,8 @@ import os
 POS_PATH = 'data/pos/'
 NER_PATH = 'data/ner/'
 UNKNOWN_WORD = 'unk'
+UNKNOWN_PREFIX = 'unknown_pre'
+UNKNOWN_SUFFIX = 'unknown_pre'
 UNKNOW_CHAR = '~'
 
 WORD_EMBED_SIZE = 150
@@ -51,14 +53,13 @@ def read_train_data_into_batches(file_name):
 
 
 def get_subword_vocab(words):
-    vocab = []
+    pre_voc = []
+    suf_voc = []
     for word in words:
-        vocab.append(word)
         if len(word) > 3:
-            vocab.append(word[:3])
-            vocab.append(word[-3:])
-    complete_vocab = set(vocab)
-    return complete_vocab
+            pre_voc.append(word[:3])
+            suf_voc.append(word[-3:])
+    return set(pre_voc), set(suf_voc)
 
 
 def validate_args(input_representation, tagging_type):
@@ -83,7 +84,9 @@ def get_word_rep(word, holder):
         elif len(word) < 4:
             return holder.word_embedding[holder.word2index[word]] * 3
         else:
-            return holder.word_embedding[holder.word2index[word]] + holder.word_embedding[holder.word2index[word[:3]]] + holder.word_embedding[holder.word2index[word[-3:]]]
+            return holder.word_embedding[holder.word2index[word]] + \
+                   holder.prefix_embedding[holder.pre2index[word[:3]]] + \
+                   holder.suffix_embedding[holder.suff2index[word[-3:]]]
     else:
         d_W = dy.parameter(holder.d_W)
         d_b = dy.parameter(holder.d_b)
@@ -200,14 +203,16 @@ def get_rare_chars(unique_chars):
 
 
 class ComponentHolder:
-    def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
-                 bwdRNN_layer2, W_ab, b_ab, word_embedding, char_embedding, char_rnn, d_W, d_b):
+    def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index,pre2index, suff2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
+                 bwdRNN_layer2, W_ab, b_ab, word_embedding,prefix_embedding,suffix_embedding,  char_embedding, char_rnn, d_W, d_b):
         self.input_representation = input_representation
         self.tagging_type = tagging_type
         self.word2index = word2index
         self.index2tag = index2tag
         self.tag2index = tag2index
         self.char2index = char2index
+        self.pre2index = pre2index
+        self.suff2index = suff2index
         self.fwdRNN_layer1 = fwdRNN_layer1
         self.bwdRNN_layer1 = bwdRNN_layer1
         self.fwdRNN_layer2 = fwdRNN_layer2
@@ -215,6 +220,8 @@ class ComponentHolder:
         self.W_ab = W_ab
         self.b_ab = b_ab
         self.word_embedding = word_embedding
+        self.prefix_embedding = prefix_embedding
+        self.suffix_embedding = suffix_embedding
         self.char_embedding = char_embedding
         self.char_rnn = char_rnn
         self.d_W = d_W
@@ -233,13 +240,24 @@ def main(in_rep, tag_type):
     train_batches, vocab, tags = read_train_data_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + train_file)
     dev_batches = read_dev_into_batches((POS_PATH if tagging_type == 'pos' else NER_PATH) + 'dev')
 
+    prefx_vocab = None
+    suffix_vocab = None
+    pref2index = None
+    suff2index = None
+    pre_embedding = None
+    suff_embedding = None
+
     vocab = set(vocab)
     for word in rare_words:
         vocab.remove(word)
     vocab.add(UNKNOWN_WORD)
     vocab = list(vocab)
     if input_representation == 'c':
-        vocab = list(get_subword_vocab(vocab))
+        prefx_vocab, suffix_vocab = get_subword_vocab(vocab)
+        prefx_vocab.add(UNKNOWN_PREFIX)
+        suffix_vocab.add(UNKNOWN_SUFFIX)
+        pref2index = {c: i for i, c in enumerate(prefx_vocab)}
+        suff2index = {c: i for i, c in enumerate(suffix_vocab)}
     tags = set(tags)
 
 
@@ -272,12 +290,15 @@ def main(in_rep, tag_type):
     l1_hidden_dim = 64
     l2_hidden_dim = 64
 
-    if input_representation == 'a' or input_representation == 'c':
+    if input_representation == 'a':
         rnnlayer1_input_dim = WORD_EMBED_SIZE
     elif input_representation == 'b':
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
         char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=150, model=model)
         rnnlayer1_input_dim = 150
+    elif input_representation == 'c':
+        pre_embedding = model.add_lookup_parameters((len(prefx_vocab), WORD_EMBED_SIZE))
+        suff_embedding = model.add_lookup_parameters((len(suffix_vocab), WORD_EMBED_SIZE))
     elif input_representation == 'd':
         rnnlayer1_input_dim = 150
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
@@ -297,8 +318,8 @@ def main(in_rep, tag_type):
     fwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=l2_hidden_dim, model=model)
     bwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=l2_hidden_dim, model=model)
 
-    holder = ComponentHolder(input_representation, tagging_type,  word2index, index2tag, tag2index, char2index,  fwdRNN_layer1, bwdRNN_layer1,
-                             fwdRNN_layer2, bwdRNN_layer2, W_ab, b_ab, word_embedding, char_embedding, char_rnn, d_W, d_b)
+    holder = ComponentHolder(input_representation, tagging_type,  word2index, index2tag, tag2index, char2index,pref2index, suff2index,  fwdRNN_layer1, bwdRNN_layer1,
+                             fwdRNN_layer2, bwdRNN_layer2, W_ab, b_ab, word_embedding, pre_embedding, suff_embedding, char_embedding, char_rnn, d_W, d_b)
 
     start_training_time = datetime.now()
     current_date = start_training_time.strftime("%d.%m.%Y")
@@ -333,4 +354,4 @@ if __name__ == '__main__':
     # main('a', 'ner')
     main('b', 'ner')
     # main('c', 'ner')
-    main('d', 'ner')
+    # main('d', 'ner')
