@@ -14,10 +14,10 @@ UNKNOWN_PREFIX = 'unknown_pre'
 UNKNOWN_SUFFIX = 'unknown_pre'
 UNKNOW_CHAR = '~'
 
-WORD_EMBED_SIZE = 150
+WORD_EMBED_SIZE = 128
 CHAR_EMBED_SIZE = 30
 EPOCHS = 5
-EVALUATE_ITERATION = 2000
+EVALUATE_ITERATION = 500 #2000
 POS_VOCAB_SIZE = 35000
 NER_VOCAB_SIZE = 20000
 
@@ -80,7 +80,9 @@ def get_word_rep(word, holder):
         return c_init.transduce(char_embeddings)[-1]
     elif holder.input_representation == 'c':
         if word not in holder.word2index:
-            return holder.word_embedding[holder.word2index[UNKNOWN_WORD]]
+            return holder.word_embedding[holder.word2index[UNKNOWN_WORD]] + \
+            holder.prefix_embedding[holder.pre2index[word[:3]]] if word[:3] in holder.pre2index.keys() else holder.prefix_embedding[holder.pre2index[UNKNOWN_PREFIX]] + \
+            holder.suffix_embedding[holder.suff2index[word[-3:]]] if word[-3:] in holder.suff2index.keys() else holder.suffix_embedding[holder.suff2index[UNKNOWN_SUFFIX]]
         elif len(word) < 4:
             return holder.word_embedding[holder.word2index[word]] * 3
         else:
@@ -108,17 +110,22 @@ def build_graph(words, holder):
     bl2_init = holder.bwdRNN_layer2.initial_state()
 
     wembs = [get_word_rep(w, holder) for w in words]
+    # if is_training:
+    #     wembs = [dy.dropout(w, 0.1) for w in wembs]
     fws = fl1_init.transduce(wembs)
     bws = bl1_init.transduce(reversed(wembs))
 
     bi = [dy.concatenate([f, b]) for f, b in zip(fws, reversed(bws))]
     fws2 = fl2_init.transduce(bi)
     bws2 = bl2_init.transduce(reversed(bi))
-    b_tag = [dy.concatenate([f2, b2]) for f2, b2 in zip(fws2, reversed(bws2))]
-    W_ab = dy.parameter(holder.W_ab)
-    b_ab = dy.parameter(holder.b_ab)
 
-    return [(W_ab * x + b_ab) for x in b_tag]
+
+    b_tag = [dy.concatenate([f2, b2]) for f2, b2 in zip(fws2, reversed(bws2))]
+    W_ab1 = dy.parameter(holder.W_ab1)
+    b_ab1 = dy.parameter(holder.b_ab1)
+    # if is_training:
+    #     b_tag = [dy.dropout(b, 0.1) for b in b_tag]
+    return [(W_ab1 * x + b_ab1) for x in b_tag]
 
 
 def calc_loss(words, tags, holder):
@@ -128,8 +135,7 @@ def calc_loss(words, tags, holder):
         tid = holder.tag2index[t]
         loss = dy.pickneglogsoftmax(v, tid)
         losses.append(loss)
-    loss = dy.esum(losses)
-    return loss / len(vecs)
+    return dy.esum(losses)
 
 
 def predict_tags(words, holder):
@@ -144,8 +150,8 @@ def predict_tags(words, holder):
 
 
 def evaluate_set(dev_batches, holder):
-    good = 0
-    bad = 0
+    good = 0.0
+    bad = 0.0
     for sentence in dev_batches:
         words = [word for word, tag in sentence]
         real_tags = [tag for word, tag in sentence]
@@ -157,7 +163,7 @@ def evaluate_set(dev_batches, holder):
                 good += 1
             else:
                 bad += 1
-    return float(good) / (good + bad)
+    return good / (good + bad)
 
 
 def ensure_directory_exists(directory_path):
@@ -204,7 +210,7 @@ def get_rare_chars(unique_chars):
 
 class ComponentHolder:
     def __init__(self, input_representation, tagging_type, word2index, index2tag, tag2index, char2index,pre2index, suff2index, fwdRNN_layer1, bwdRNN_layer1, fwdRNN_layer2,
-                 bwdRNN_layer2, W_ab, b_ab, word_embedding,prefix_embedding,suffix_embedding,  char_embedding, char_rnn, d_W, d_b):
+                 bwdRNN_layer2, W_ab1, b_ab1,  word_embedding,prefix_embedding,suffix_embedding,  char_embedding, char_rnn, d_W, d_b):
         self.input_representation = input_representation
         self.tagging_type = tagging_type
         self.word2index = word2index
@@ -217,8 +223,8 @@ class ComponentHolder:
         self.bwdRNN_layer1 = bwdRNN_layer1
         self.fwdRNN_layer2 = fwdRNN_layer2
         self.bwdRNN_layer2 = bwdRNN_layer2
-        self.W_ab = W_ab
-        self.b_ab = b_ab
+        self.W_ab1 = W_ab1
+        self.b_ab1 = b_ab1
         self.word_embedding = word_embedding
         self.prefix_embedding = prefix_embedding
         self.suffix_embedding = suffix_embedding
@@ -279,9 +285,6 @@ def main(in_rep, tag_type):
 
     model = dy.Model()
     trainer = dy.AdamTrainer(model)
-    # trainer.learning_rate = 0.0005
-    # trainer.learning_rate = 0.00025
-    # trainer.learning_rate = 0.002
 
     char_embedding = None
     char_rnn = None
@@ -294,23 +297,24 @@ def main(in_rep, tag_type):
         rnnlayer1_input_dim = WORD_EMBED_SIZE
     elif input_representation == 'b':
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
-        char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=150, model=model)
-        rnnlayer1_input_dim = 150
+        char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=128, model=model)
+        rnnlayer1_input_dim = 128
     elif input_representation == 'c':
+        rnnlayer1_input_dim = WORD_EMBED_SIZE
         pre_embedding = model.add_lookup_parameters((len(prefx_vocab), WORD_EMBED_SIZE))
         suff_embedding = model.add_lookup_parameters((len(suffix_vocab), WORD_EMBED_SIZE))
     elif input_representation == 'd':
-        rnnlayer1_input_dim = 150
+        rnnlayer1_input_dim = 200
         char_embedding = model.add_lookup_parameters((num_of_chars, CHAR_EMBED_SIZE))
-        char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=150, model=model)
-        d_W = model.add_parameters((150, 300))
-        d_b = model.add_parameters(150)
+        char_rnn = dy.LSTMBuilder(layers=1, input_dim=CHAR_EMBED_SIZE, hidden_dim=128, model=model)
+        d_W = model.add_parameters((200, 256))
+        d_b = model.add_parameters(200)
 
     rnnlayer2_input_dim = l1_hidden_dim * 2
     word_embedding = model.add_lookup_parameters((vocab_size, WORD_EMBED_SIZE))
 
-    W_ab = model.add_parameters((len(tags), l2_hidden_dim * 2))
-    b_ab = model.add_parameters(len(tags))
+    W_ab1 = model.add_parameters((len(tags), l2_hidden_dim * 2))
+    b_ab1 = model.add_parameters(len(tags))
 
     fwdRNN_layer1 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer1_input_dim, hidden_dim=l1_hidden_dim, model=model)
     bwdRNN_layer1 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer1_input_dim, hidden_dim=l1_hidden_dim, model=model)
@@ -319,7 +323,7 @@ def main(in_rep, tag_type):
     bwdRNN_layer2 = dy.LSTMBuilder(layers=1, input_dim=rnnlayer2_input_dim, hidden_dim=l2_hidden_dim, model=model)
 
     holder = ComponentHolder(input_representation, tagging_type,  word2index, index2tag, tag2index, char2index,pref2index, suff2index,  fwdRNN_layer1, bwdRNN_layer1,
-                             fwdRNN_layer2, bwdRNN_layer2, W_ab, b_ab, word_embedding, pre_embedding, suff_embedding, char_embedding, char_rnn, d_W, d_b)
+                             fwdRNN_layer2, bwdRNN_layer2, W_ab1, b_ab1, word_embedding, pre_embedding, suff_embedding, char_embedding, char_rnn, d_W, d_b)
 
     start_training_time = datetime.now()
     current_date = start_training_time.strftime("%d.%m.%Y")
@@ -347,11 +351,11 @@ def main(in_rep, tag_type):
     save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model, model_file)
 
 if __name__ == '__main__':
-    # main('a', 'pos')
-    # main('b', 'pos')
-    # main('c', 'pos')
-    # main('d', 'pos')
-    # main('a', 'ner')
+    main('a', 'pos')
+    main('b', 'pos')
+    main('c', 'pos')
+    main('d', 'pos')
+    main('a', 'ner')
     main('b', 'ner')
-    # main('c', 'ner')
-    # main('d', 'ner')
+    main('c', 'ner')
+    main('d', 'ner')
