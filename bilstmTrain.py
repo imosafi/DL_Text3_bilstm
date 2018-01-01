@@ -234,11 +234,11 @@ class ComponentHolder:
         self.d_b = d_b
 
 
-def main(in_rep, tag_type):
-    input_representation = in_rep #sys.argv[1]
+def main():
+    input_representation = sys.argv[1]
     train_file = sys.argv[2]
     model_file = sys.argv[3]
-    tagging_type = tag_type #sys.argv[4]
+    tagging_type = sys.argv[4]
 
     validate_args(input_representation, tagging_type)
 
@@ -351,11 +351,4 @@ def main(in_rep, tag_type):
     save_results_and_model(evaluation_results, current_date, current_time, tagging_type, input_representation, total_training_time, model, model_file)
 
 if __name__ == '__main__':
-    main('a', 'pos')
-    main('b', 'pos')
-    main('c', 'pos')
-    main('d', 'pos')
-    main('a', 'ner')
-    main('b', 'ner')
-    main('c', 'ner')
-    main('d', 'ner')
+    main()

@@ -19,7 +19,6 @@ class LstmAcceptor(object):
         b1 = self.b1.expr()
         b2 = self.b2.expr()
         outputs = lstm.transduce(sequence)
-        # result = dy.softmax(W2 * (dy.tanh(W1 * outputs[-1]) + b1) + b2)
         result = W2 * (dy.tanh(W1 * outputs[-1]) + b1) + b2
         return result
 
@@ -66,24 +65,19 @@ test_batches = devide_to_batches(test, BATCH_SIZE)
 pretrain_time = datetime.datetime.now()
 print 'current time: ' + str(pretrain_time) + ' start training:'
 
-# training code: batched.
 for epoch in xrange(EPOCHS):
     random.shuffle(train_batches)
     for i_batch, batch in enumerate(train_batches):
-        dy.renew_cg()     # we create a new computation graph for the epoch, not each item.
-        # we will treat all these 3 datapoints as a single batch
+        dy.renew_cg()
         losses = []
         for sequence, label in batch:
             vecs = [embeds[char2int[i]] for i in sequence]
             preds = acceptor(vecs)
             loss = dy.pickneglogsoftmax(preds, label)
             losses.append(loss)
-        # we accumulated the losses from all the batch.
-        # Now we sum them, and do forward-backward as usual.
-        # Things will run with efficient batch operations.
         batch_loss = dy.esum(losses) / len(batch)
         if i_batch % 100 == 0:
-            print 'epoch ' + str(epoch) + ' batch ' + str(i_batch) + ' loss ' + str(batch_loss.npvalue()) # this calls forward on the batch
+            print 'epoch ' + str(epoch) + ' batch ' + str(i_batch) + ' loss ' + str(batch_loss.npvalue())
         batch_loss.backward()
         trainer.update()
 
@@ -91,20 +85,16 @@ training_duration = datetime.datetime.now() - pretrain_time
 print 'Done! training took: ' + str(training_duration) + '\n'
 
 print "\n\nPrediction time!\n"
-# prediction code:
 correct = 0
 for batch in test_batches:
-    dy.renew_cg() # new computation graph
+    dy.renew_cg()
     batch_preds = []
     for sequence, label in batch:
         vecs = [embeds[char2int[i]] for i in sequence]
         preds = dy.softmax(acceptor(vecs))
         batch_preds.append(preds)
 
-    # now that we accumulated the prediction expressions,
-    # we run forward on all of them:
     dy.forward(batch_preds)
-    # and now we can efficiently access the individual values:
     for preds in batch_preds:
         vals  = preds.npvalue()
         if np.argmax(vals) == label:

@@ -119,8 +119,6 @@ def main():
 
     word_tag_tuples = []
 
-    print evaluate_set(dev_batches, holder)
-
     for sentence in test_batches:
         words = [word for word in sentence]
         word_tag_tuples.extend(predict_tags(words, holder))
