@@ -18,8 +18,8 @@ WORD_EMBED_SIZE = 128
 CHAR_EMBED_SIZE = 30
 EPOCHS = 5
 EVALUATE_ITERATION = 500 #2000
-POS_VOCAB_SIZE = 35000
-NER_VOCAB_SIZE = 20000
+POS_VOCAB_SIZE = 42000
+NER_VOCAB_SIZE = 23000
 
 
 def read_dev_into_batches(file_name):
@@ -30,7 +30,7 @@ def read_dev_into_batches(file_name):
             batches.append(current_batch)
             current_batch = []
         else:
-            text, label = line.strip().lower().split()
+            text, label = line.strip().split()
             current_batch.append((text, label))
     return batches
 
@@ -45,7 +45,7 @@ def read_train_data_into_batches(file_name):
             batches.append(current_batch)
             current_batch = []
         else:
-            text, label = line.strip().lower().split()
+            text, label = line.strip().split()
             current_batch.append((text, label))
             vocab.append(text)
             tags.append(label)
@@ -157,7 +157,7 @@ def evaluate_set(dev_batches, holder):
         real_tags = [tag for word, tag in sentence]
         tags = [tag for word, tag in predict_tags(words, holder)]
         for t1, t2 in zip(real_tags, tags):
-            if holder.tagging_type == 'ner' and t1 == 'o' and t2 == 'o':
+            if holder.tagging_type == 'ner' and t1 == 'O' and t2 == 'O':
                 continue
             if t1 == t2:
                 good += 1
@@ -189,7 +189,7 @@ def get_train_words(file_name):
     vocab = []
     for line in file(file_name):
         if not line == '\n':
-            text, _ = line.strip().lower().split()
+            text, _ = line.strip().split()
             vocab.append(text)
     return vocab
 

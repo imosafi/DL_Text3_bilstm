@@ -15,7 +15,7 @@ def read_test_batches(file_name):
             batches.append(current_batch)
             current_batch = []
         else:
-            text = line.strip().lower()
+            text = line.strip()
             current_batch.append(text)
     return batches
 
